@@ -2,9 +2,11 @@ import javassist._
 import org.opalj.ai.{AIResult, ValuesDomain}
 import org.opalj.ai.domain.{PerformAI, RefineDefUseUsingOrigins}
 import org.opalj.ai.domain.l1.DefaultDomainWithCFGAndDefUse
+import org.opalj.br.Code.unapply
 import org.opalj.br.analyses.Project
-import org.opalj.br.instructions.{INVOKEINTERFACE, INVOKESPECIAL, INVOKESTATIC, INVOKEVIRTUAL, Instruction}
+import org.opalj.br.instructions.{INVOKEINTERFACE, INVOKESPECIAL, INVOKESTATIC, INVOKEVIRTUAL, Instruction, LoadClass_W}
 import org.opalj.br._
+import org.opalj.collection.immutable.Naught
 
 import java.net.URL
 import scala.collection.mutable.ListBuffer
@@ -36,7 +38,8 @@ object FirstCode {
             }
             else if (name.equals("setAccessible")) {
               methodCallReflectionSetAccessible += method
-              getInfosFormSetAccessible(pc, result, invoke.methodDescriptor.parameterTypes.size)
+              var obj = new ReflectionUse()
+              getInfosFormSetAccessible(pc, result, invoke.methodDescriptor.parameterTypes.size, body, obj)
 
             }
             else if (name.equals("trySetAccessible")) {
@@ -51,36 +54,69 @@ object FirstCode {
     }
   }
 
-  def getInfosFormSetAccessible(pc: Integer, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}, parameters_size: Integer): Unit = {
+  def getInfosFormSetAccessible(pc: Integer, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}, parameters_size: Integer, body: Code, obj: ReflectionUse): Unit = {
     val operands = result.operandsArray(pc)
     if (operands == null) {
       return
     }
     operands.foreach {
       case result.domain.StringValue(s) =>
-        println(s)
       case op@result.domain.DomainReferenceValueTag(v) =>
         if (v.allValues.exists(p =>
           p.upperTypeBound.containsId(ObjectType("java/lang/reflect/Field").id))) {
           result.domain.originsIterator(op).foreach(origin => {
-            getInfosFormSetAccessible(origin, result, parameters_size)
+            setFieldToObject(origin, obj, result, body)
           })
         }
-        if (v.allValues.exists(p =>
-          p.upperTypeBound.containsId(ObjectType("java/lang/Class").id))){
-          result.domain.originsIterator(op).foreach(origin => {
-            getInfosFormSetAccessible(origin, result, parameters_size)
-          })
-        }
-      case result.domain.MultipleReferenceValues(s) ⇒ s.foreach {
+
+      /*case result.domain.MultipleReferenceValues(s) ⇒ s.foreach {
         case result.domain.StringValue(st) ⇒ println("st: " + st)
-        case value ⇒ value.origins.foreach(getInfosFormSetAccessible(_, result, parameters_size))
-      }
+        case value ⇒ value.origins.foreach(getInfosFormSetAccessible(_, result, parameters_size, body))
+      }*/
       case e ⇒
         println(e)
     }
 
   }
+
+  def setFieldToObject(origin: Integer, obj: ReflectionUse, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}, body: Code): Unit = {
+    val operands = result.operandsArray(origin)
+    if (operands == null) {
+      return
+    }
+    operands.foreach {
+      case result.domain.StringValue(s) => obj.setAttributeName(s)
+      case op@result.domain.DomainReferenceValueTag(v) =>
+        if (v.allValues.exists(p =>
+          p.upperTypeBound.containsId(ObjectType.Class.id))){
+          result.domain.originsIterator(op).foreach(org => {
+            setClassToObject(org, obj, result, body)
+          })
+        }
+      case _ =>
+    }
+  }
+
+  def setClassToObject(origin: Integer, obj: ReflectionUse, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}, body: Code): Unit = {
+    val operands = result.operandsArray(origin)
+    if (operands == null)
+      return
+    if (operands.equals(Naught)){
+      val instruction = body.instructions(origin)
+      instruction match {
+        case load_class: LoadClass_W =>
+          val value = load_class.value
+          obj.setClassName(value.asObjectType.simpleName)
+        case _ =>
+      }
+    } else {
+      operands.foreach{
+        case result.domain.StringValue(s) => obj.setClassName(s)
+        case _ =>
+      }
+    }
+  }
+
 
   def checkInstructionCallReflection(instruction: Instruction): Boolean ={
     instruction.opcode match {
