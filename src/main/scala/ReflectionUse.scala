@@ -1,17 +1,33 @@
 import org.opalj.br._
+
 import scala.collection.mutable.ListBuffer
 import scala.collection.mutable.Map
+import org.opalj.br._
+
 
 class ReflectionUse {
-  private var className: String = ""
-  private var attribute: Map[String, ListBuffer[String]] =Map()
-  private var methodName: String = ""
-  private var methodDescriptors: ListBuffer[String] = new ListBuffer[String]()
-  private var constructors: Map[String, ListBuffer[String]] = Map()
-  // pc, instruction, method, class mit fqn
+  var className: String = ""
+  var methodName: String = ""
+  var nameReflectionFunction : Option[String] = None
+  var byteCodeInfo: Option[ByteCodeInfo] = None
+  var parameters: ListBuffer[ReflectionUse] = new ListBuffer[ReflectionUse]()
+  var description: String = ""
+  var attribute: Map[String, ListBuffer[String]] = Map()
+  var methodDescriptors: ListBuffer[String] = new ListBuffer[String]()
+  var constructors: Map[String, ListBuffer[String]] = Map()
+  var fieldAndClass: Option[FieldAndClass] = None
+  var methodAndClass: Option[MethodAndClass] = None
+  var classConstructor: Option[ClassConstructor] = None
+  var isValid: Boolean = true
 
   def setClassName(className: String): Unit = {
-    this.className = className
+    if (methodAndClass.isDefined){
+      methodAndClass.get.className.append(className)
+    } else if (fieldAndClass.isDefined){
+      fieldAndClass.get.className.append(className)
+    } else if (classConstructor.isDefined) {
+      classConstructor.get.className.append(className)
+    }
   }
   def setAttributeName(attributeName: String, classNames: ListBuffer[String]): Unit = {
     this.attribute.put(attributeName, classNames)
@@ -19,9 +35,6 @@ class ReflectionUse {
    def setMethodName(methodName: String): Unit = {
      this.methodName = methodName
    }
-  def addMethodDescriptors(methodDescriptor: String): Unit = {
-    this.methodDescriptors.append(methodDescriptor)
-  }
 
   def setConstructor(className: String, parameters: ListBuffer[String]): Unit = {
     this.constructors.put(className, parameters)
