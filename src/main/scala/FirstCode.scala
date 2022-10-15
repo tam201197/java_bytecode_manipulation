@@ -260,6 +260,7 @@ object FirstCode {
         }
       case _ =>
     }
+    if (!obj.isValid) return
     result.domain.originsIterator(operands.last).foreach(org => {
       getClassInfos(org, classNames, obj, new_info, body, result)
       if (!obj.isValid) return
@@ -458,30 +459,48 @@ object FirstCode {
            INVOKEINTERFACE.opcode =>
         val methodName = instruction.asInvocationInstruction.name
         if (methodName == "getSuperclass" || methodName == "asSubclass") {
-          var lst = new ListBuffer[ByteCodeInfo]()
-          var param_info = new ByteCodeInfo()
-          lst.append(param_info)
-          byteCodeInfo.parametersByteCodeInfo = Option(lst)
-          result.domain.originsIterator(operands.head).foreach(org =>
-            getClassInfos(org, classNames, obj, param_info, body, result)
-          )
-          var new_info = new ByteCodeInfo()
-          byteCodeInfo.previousByteCodeInfo = Option(new_info)
-          result.domain.originsIterator(operands.last).foreach(org =>
-            getAnotherInfos(org, obj, new_info, body, result)
-          )
+          if (!operands.head.equals(operands.last)){
+            var lst = new ListBuffer[ByteCodeInfo]()
+            var param_info = new ByteCodeInfo()
+            lst.append(param_info)
+            byteCodeInfo.parametersByteCodeInfo = Option(lst)
+            result.domain.originsIterator(operands.head).foreach(org =>
+              getClassInfos(org, classNames, obj, param_info, body, result)
+            )
+            var new_info = new ByteCodeInfo()
+            byteCodeInfo.previousByteCodeInfo = Option(new_info)
+            result.domain.originsIterator(operands.last).foreach(org =>
+              getAnotherInfos(org, obj, new_info, body, result)
+            )
+          } else {
+            var new_info = new ByteCodeInfo()
+            byteCodeInfo.previousByteCodeInfo = Option(new_info)
+            var new_classNames = new ListBuffer[String]()
+            result.domain.originsIterator(operands.last).foreach(org => {
+              getClassInfos(org, new_classNames, obj, new_info, body, result)
+              new_classNames.foreach(name =>
+                project.allClassFiles.filter(class_file => class_file.fqn.equals(name)).foreach(class_file =>
+                  if (class_file.superclassType.isDefined)
+                    classNames.append(class_file.superclassType.get.fqn)
+                  else
+                    obj.isValid = false
+                )
+              )
+            })
+          }
         } else {
           var lst = new ListBuffer[ByteCodeInfo]()
           operands.foreach(op => {
             if (!obj.isValid) return
-            if (!op.equals(operands.last) || operands.head.equals(operands.last)) {
+            if (methodName == "forName" || (!op.equals(operands.last) && !operands.head.equals(operands.last))) {
               var param_info = new ByteCodeInfo()
-              lst.append(param_info)
+              byteCodeInfo.parametersByteCodeInfo = Option(lst)
               op match {
                 case result.domain.StringValue(s) =>
                   val org = result.domain.origins(op).head
                   param_info.setInfo(org, body.instructions(org))
                   classNames.append(s)
+                  lst.append(param_info)
                 case result.domain.MultipleReferenceValues(v) =>
                   var multi_param = new MultiByteCodeInfo()
                   lst.append(multi_param)
@@ -499,9 +518,10 @@ object FirstCode {
                     })
                   }
                 case result.domain.DomainReferenceValueTag(v) =>
-                  result.domain.originsIterator(op).foreach(org => {
-                    getAnotherInfos(org, obj, param_info, body, result)
-                  })
+                    lst.append(param_info)
+                    result.domain.originsIterator(op).foreach(org => {
+                      getAnotherInfos(org, obj, param_info, body, result)
+                    })
                 case _ =>
               }
             } else {
