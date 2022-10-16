@@ -1,8 +1,10 @@
 import javassist._
+import javassist.bytecode.LocalVariableAttribute
 import org.opalj.ai.{AIResult, ValueOriginsIterator, ValuesDomain}
 import org.opalj.ai.domain.{PerformAI, RefineDefUseUsingOrigins}
 import org.opalj.ai.domain.l1.DefaultDomainWithCFGAndDefUse
 import org.opalj.br.analyses.Project
+import org.opalj.br.analyses.MethodInfo
 import org.opalj.br.instructions._
 import org.opalj.br._
 import org.opalj.value.AnIntegerValue
@@ -42,22 +44,21 @@ object FirstCode {
           }
           else if (name.equals("setAccessible")) {
             methodCallReflectionSetAccessible += method
-            var obj = new ReflectionSetAccessible()
+            /*var obj = new ReflectionSetAccessible()
             makeReflectionUseObject(pc, instr, method, obj, byteCodeInfo)
-            val len = setAccessibleObjects.length
-            if (len == 7)
-              println(len)
             getInfosFromSetAccessible(pc, body, obj, byteCodeInfo, result)
-            setAccessibleObjects += obj
+            setAccessibleObjects += obj*/
           }
           else if (name.startsWith("set")) {
             var obj = new ReflectionSet()
             makeReflectionUseObject(pc, instr, method, obj, byteCodeInfo)
             methodCallReflectionSet += method
-            /*getInfosFromSet(pc, body, obj, byteCodeInfo, result)
+            if (count == 7)
+              println(count)
+            getInfosFromSet(pc, body, obj, byteCodeInfo, result)
             setObjects += obj
             count += 1
-            println(count)*/
+            println(count)
           }
 
         }
@@ -153,21 +154,32 @@ object FirstCode {
     var classNames = new ListBuffer[String]()
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
     val value_operand = operands.head
+    var lst = new ListBuffer[ByteCodeInfo]()
+    byteCodeInfo.parametersByteCodeInfo = Option(lst)
+    var value_param = new ByteCodeInfo()
+    lst.append(value_param)
     value_operand match {
       case result.domain.IntegerRange(v) =>
         println(v.toString())
+      case result.domain.DomainReferenceValueTag(v) =>
+        getValueParameterInReflectionSet(result.domain.originsIterator(value_operand), body, obj, value_param, result)
       case _ =>
         if (value_operand.isInstanceOf[result.domain.AnIntegerValue]) {
           obj.isValid = false
           return
         }
-        getValueParameterInReflectionSet(result.domain.originsIterator(value_operand), body, obj, result)
+        getValueParameterInReflectionSet(result.domain.originsIterator(value_operand), body, obj, value_param, result)
     }
-    val object_operand = operands(1)
+    var object_param = new ByteCodeInfo()
+    lst.append(object_param)
     var object_origins = result.domain.originsIterator(operands(1))
+    getObjectParameterInReflectionSet(object_origins, body, obj, object_param, result)
 
-    getObjectParameterInReflectionSet(object_origins, body, obj, new_info, result)
     result.domain.originsIterator(operands.last).foreach(org => {
+      if (org < 0) {
+        obj.isValid = false
+        return
+      }
       val instr = body.instructions(org)
       if (instr.isInvocationInstruction &&
         (instr.asInvocationInstruction.name.equals("getDeclaredField") || instr.asInvocationInstruction.name.equals("getField")))
@@ -176,15 +188,18 @@ object FirstCode {
     )
   }
 
-  def getValueParameterInReflectionSet(origins: ValueOriginsIterator, body: Code, obj: ReflectionSet,
+  def getValueParameterInReflectionSet(origins: ValueOriginsIterator, body: Code, obj: ReflectionSet, byteCodeInfo: ByteCodeInfo,
                                        result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     origins.foreach(org => {
-      checkOriginValue(org, obj)
+      byteCodeInfo.pc = org
+      if (org < 0){
+        checkOriginValue(org, obj)
+        return
+      }
       val operands = result.operandsArray(org)
       val instruction = body.instructions(org)
-      val new_info = new ByteCodeInfo()
-      new_info.setInfo(org, instruction)
-      obj.valueInfo.append(new_info)
+      byteCodeInfo.instruction = instruction
+      obj.valueInfo.append(byteCodeInfo)
       instruction.opcode match {
         case ACONST_NULL.opcode =>
           obj.valueObject.append("null")
@@ -195,33 +210,59 @@ object FirstCode {
           if (class_name.equals(obj.className))
             obj.valueObject.append("this." + method_name)
           else
-            obj.valueObject.append(class_name + "." + method_name)
+            obj.valueObject.append(class_name.split('.').last + "." + method_name)
+        case GETFIELD.opcode =>
+          val get_field = instruction.asInstanceOf[GETFIELD]
+          obj.valueObject.append("this." + get_field.name)
+        case GETSTATIC.opcode =>
+          val get_static = instruction.asInstanceOf[GETSTATIC]
+          obj.valueObject.append("this." + get_static.name)
+        case NEW.opcode =>
+          val instruction_new = instruction.asInstanceOf[NEW]
+          obj.valueObject.append("new " + instruction_new.objectType.simpleName + "()")
         case _ =>
+          operands.head match {
+            case result.domain.DomainReferenceValueTag(v) =>
+              result.domain.originsIterator(operands.head).foreach(org =>
+                getNameOfLocalVariable(org, obj.method)
+              )
+            case _ =>
+          }
       }
     })
   }
 
   def checkOriginValue(origin: Int, obj: ReflectionSet): Unit = {
-    if (origin < 0) {
-      if (origin == -1 && !obj.method.isStatic) {
-        obj.modifiedObject.append("this")
-      } else
-        obj.isValid = false
-    }
+    if (origin == -1 && !obj.method.isStatic) {
+      obj.modifiedObject.append("this")
+    } else
+      obj.isValid = false
+
   }
 
   def getObjectParameterInReflectionSet(origins: ValueOriginsIterator, body: Code, obj: ReflectionSet, byteCodeInfo: ByteCodeInfo,
                                         result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     origins.foreach(org => {
-      checkOriginValue(org, obj)
+      byteCodeInfo.pc = org
+      if (org <0) {
+        checkOriginValue(org, obj)
+        return
+      }
       val operands = result.operandsArray(org)
       var instruction = body.instructions(org)
+      byteCodeInfo.instruction = instruction
       var new_info = new ByteCodeInfo()
       new_info.setInfo(org, instruction)
       obj.objectInfo.append(new_info)
       instruction.opcode match {
         case ACONST_NULL.opcode =>
           obj.modifiedObject.append("null")
+        case GETFIELD.opcode =>
+          val get_field = instruction.asInstanceOf[GETFIELD]
+          obj.modifiedObject.append("this." + get_field.name)
+        case GETSTATIC.opcode =>
+          val get_static = instruction.asInstanceOf[GETSTATIC]
+          obj.modifiedObject.append("this." + get_static.name)
         case _ =>
       }
       /*result.domain.originsIterator(operands.last).foreach(org =>{
@@ -234,6 +275,32 @@ object FirstCode {
         }
       })*/
     })
+  }
+
+  def getNameOfLocalVariable(pc: Int, method: Method): Unit ={
+    val pool = ClassPool.getDefault
+    pool.insertClassPath(projectJAR)
+    val qualified_name = method.classFile.fqn.replace('/', '.')
+    val cc = pool.get(qualified_name)
+    try {
+      if (method.isPublic){
+        val ct_method = cc.getMethod(method.name, method.descriptor.toJVMDescriptor)
+        val methodInfo = ct_method.getMethodInfo
+        val ca = methodInfo.getCodeAttribute
+        val lva = ca.getAttribute(LocalVariableAttribute.tag).asInstanceOf[LocalVariableAttribute]
+        val name = lva.variableName(pc)
+        println(lva)
+      } else {
+        val ct_method = cc.getDeclaredMethod(method.name)
+        val methodInfo = ct_method.getMethodInfo
+        val const_pool = methodInfo.getCodeAttribute.getConstPool
+        val lva = new LocalVariableAttribute(const_pool)
+        val name = lva.variableName(pc)
+        println(lva)
+      }
+    } catch{
+      case e: NotFoundException =>
+    }
   }
 
 
@@ -256,7 +323,7 @@ object FirstCode {
         if (array_length > 0) {
           var param_list = new ListBuffer[ByteCodeInfo]()
           byteCodeInfo.parametersByteCodeInfo = Option(param_list)
-          getMethodParameters(v.origin, origin, array_length, classConstructor, byteCodeInfo, body)
+          getTypeParametersOfMethod(v.origin, origin, array_length, classConstructor, byteCodeInfo, body)
         }
       case _ =>
     }
@@ -314,7 +381,7 @@ object FirstCode {
             if (param_length > 0) {
               var lst = new ListBuffer[ByteCodeInfo]()
               byteCodeInfo.parametersByteCodeInfo = Option(lst)
-              getMethodParameters(v.origin, origin, v.length.get, methodAndClass, byteCodeInfo, body)
+              getTypeParametersOfMethod(v.origin, origin, v.length.get, methodAndClass, byteCodeInfo, body)
             }
 
           case op@result.domain.DomainReferenceValueTag(v) =>
@@ -347,7 +414,7 @@ object FirstCode {
 
   }
 
-  def getMethodParameters(start: Integer, end: Integer, count: Integer, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfo, body: Code): Unit = {
+  def getTypeParametersOfMethod(start: Integer, end: Integer, count: Integer, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfo, body: Code): Unit = {
     val nextPc = body.pcOfNextInstruction(start)
     if (count == 0 || nextPc == end)
       return
@@ -367,7 +434,7 @@ object FirstCode {
         new_count = new_count - 1
       case _ =>
     }
-    getMethodParameters(nextPc, end, new_count, obj, byteCodeInfo, body)
+    getTypeParametersOfMethod(nextPc, end, new_count, obj, byteCodeInfo, body)
   }
 
   def saveParametersInfoInByteCodeInfo(pc: Int, param: String, instruction: Instruction, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfo): Unit = {
@@ -605,88 +672,6 @@ def getClassName(org: Int, classNames: ListBuffer[String], obj: ReflectionUse, b
   }
 }
 
-/*  def getClassInfos(origin: Integer, classNames: ListBuffer[String], obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, body: Code, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
-    byteCodeInfo.pc = origin
-    if (origin < 0) {
-      if (origin != -1 || obj.method.isStatic) {
-        obj.isValid = false
-      }
-      return
-    }
-    val instruction = body.instructions(origin)
-    byteCodeInfo.instruction = instruction
-    val operands = result.operandsArray(origin)
-    if (operands == null) return
-    if (operands.equals(Naught)) {
-      instruction match {
-        case loadClassW: LoadClass_W =>
-          val value = loadClassW.value
-          classNames.append(value.asObjectType.fqn)
-        case loadClass: LoadClass =>
-          val value = loadClass.value
-          classNames.append(value.asObjectType.fqn)
-        case loadString: LoadString =>
-          classNames.append(loadString.value)
-        case getStatic: GETSTATIC =>
-          obj.isValid = false
-        case _ =>
-      }
-    } else {
-      operands.foreach( op => {
-        if (!obj.isValid)
-          return
-        op match {
-          case result.domain.StringValue(s) =>
-            var new_info = new ByteCodeInfo()
-            byteCodeInfo.previousByteCodeInfo = Option(new_info)
-            val org = result.domain.origins(op).head
-            new_info.setInfo(org, body.instructions(org))
-            byteCodeInfo.previousByteCodeInfo = Option(new_info)
-            classNames.append(s)
-          case result.domain.MultipleReferenceValues(v) =>
-            var lst = new ListBuffer[ByteCodeInfo]()
-            result.domain.originsIterator(op).foreach(org => {
-              var new_info = new ByteCodeInfo()
-              lst.append(new_info)
-              getClassInfos(org, classNames, obj, new_info, body, result)
-              byteCodeInfo.multiPrevByteCodeInfo = Option(lst)
-            })
-          case result.domain.DomainReferenceValueTag(v) =>
-            result.domain.originsIterator(op).foreach(org => {
-              if (instruction.isInvocationInstruction) {
-                val name = instruction.asMethodInvocationInstruction.name
-                if (name == "getClass" && result.domain.origins(operands.head).head < 0)
-                  return
-              }
-              var new_info = new ByteCodeInfo()
-              byteCodeInfo.previousByteCodeInfo = Option(new_info)
-              getClassInfos(org, classNames, obj, new_info, body, result)
-            })
-          case _ =>
-        }
-      })
-    }
-    instruction.opcode match {
-      case INVOKEVIRTUAL.opcode |
-           INVOKESPECIAL.opcode |
-           INVOKESTATIC.opcode |
-           INVOKEINTERFACE.opcode =>
-        val name = instruction.asMethodInvocationInstruction.name
-        if (name == "getSuperclass") {
-          if (classNames.isEmpty)
-            classNames.append(result.domain.method.classFile.superclassType.get.fqn)
-          else {
-            val className = classNames.last
-            val superClass = project.allClassFiles.filter(p => p.fqn.equals(className)).head.superclassType
-            classNames.remove(classNames.length - 1)
-            classNames.append(superClass.get.fqn)
-          }
-        }
-      case _ =>
-    }
-  }*/
-
-
 def checkInstructionCallReflection(instruction: Instruction): Boolean = {
   instruction.opcode match {
     case INVOKEVIRTUAL.opcode |
@@ -717,30 +702,6 @@ def isMethodUsingReflection(method: Method): Boolean = {
   else false
 }
 
-def workWithReflectionSetAccessible(method: Method): Unit = {
-  val domain = new DefaultDomainWithCFGAndDefUse(project, method) with RefineDefUseUsingOrigins
-  val body = method.body.get
-  lazy val result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]} = PerformAI(domain)
-  body.iterate { (pc, instruction) =>
-    instruction.opcode match {
-      case INVOKEVIRTUAL.opcode |
-           INVOKESPECIAL.opcode |
-           INVOKEINTERFACE.opcode =>
-        val invoke = instruction.asMethodInvocationInstruction
-        val operands = result.operandsArray(pc)
-        val params = invoke.methodDescriptor.parameterTypes
-        val index = params.size
-        if (operands == null)
-          return
-      // val op = operands(index)
-      case INVOKESTATIC.opcode =>
-      case _ =>
-    }
-
-  }
-
-}
-
 def main(args: Array[String]): Unit = {
   val methods_with_body = project.allMethodsWithBody
   val method_using_reflection = methods_with_body.filter(method => isMethodUsingReflection(method))
@@ -751,9 +712,6 @@ def main(args: Array[String]): Unit = {
   println("invoke: " + methodCallReflectionInvoke.length)
   println("setAccessible: " + methodCallReflectionSetAccessible.length)
   println("set: " + methodCallReflectionSet.length)
-  methodCallReflectionInvoke.foreach(method => {
-    workWithReflectionSetAccessible(method)
-  })
 
   /*val pool = ClassPool.getDefault
   pool.insertClassPath(projectJAR)
