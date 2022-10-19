@@ -6,8 +6,6 @@ class ByteCodeInfo {
   var instruction: Instruction = _
   var parametersByteCodeInfo: Option[ListBuffer[ByteCodeInfo]] = None
   var previousByteCodeInfo: Option[ByteCodeInfo] = None
-  var multiPrevByteCodeInfo: Option[ListBuffer[ByteCodeInfo]] = None
-
   def setInfo(pc: Int, instruction: Instruction): Unit ={
     this.pc = pc
     this.instruction = instruction

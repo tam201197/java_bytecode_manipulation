@@ -1,7 +1,7 @@
 import scala.collection.mutable.ListBuffer
 
 class ClassConstructor extends ObjectCalledByReflection {
-  override var className: ListBuffer[String] = new ListBuffer[String]()
+  override var className: String = _
   override var parametersType: ListBuffer[String] = new ListBuffer[String]()
   override var parametersPC: ListBuffer[Int] = new ListBuffer[Int]()
 

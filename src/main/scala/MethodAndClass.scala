@@ -1,8 +1,8 @@
 import scala.collection.mutable.ListBuffer
 
 class MethodAndClass extends ObjectCalledByReflection {
-  var methodName: String = ""
-  override var className: ListBuffer[String] = new ListBuffer[String]()
+  var methodName: String = _
+  override var className: String = _
   override var parametersType: ListBuffer[String] = new ListBuffer[String]()
   var parametersValues: ListBuffer[String] = new ListBuffer[String]()
   override var parametersPC: ListBuffer[Int] = new ListBuffer[Int]()

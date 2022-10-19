@@ -44,21 +44,17 @@ object FirstCode {
           }
           else if (name.equals("setAccessible")) {
             methodCallReflectionSetAccessible += method
-            /*var obj = new ReflectionSetAccessible()
+            var obj = new ReflectionSetAccessible()
             makeReflectionUseObject(pc, instr, method, obj, byteCodeInfo)
             getInfosFromSetAccessible(pc, body, obj, byteCodeInfo, result)
-            setAccessibleObjects += obj*/
+            setAccessibleObjects += obj
           }
           else if (name.startsWith("set")) {
             var obj = new ReflectionSet()
             makeReflectionUseObject(pc, instr, method, obj, byteCodeInfo)
             methodCallReflectionSet += method
-            if (count == 7)
-              println(count)
             getInfosFromSet(pc, body, obj, byteCodeInfo, result)
             setObjects += obj
-            count += 1
-            println(count)
           }
 
         }
@@ -81,17 +77,6 @@ object FirstCode {
     if (operands == null) {
       return
     }
-    /*var op = operands.head
-    op match {
-      case result.domain.IntegerRange(v) =>
-        val parameterInfo = new ByteCodeInfo()
-        val org = op.PCIndependent
-        parameterInfo.pc = Option(org)
-        parameterInfo.instruction = Option(body.instructions(org))
-        val parametersInfo = new ListBuffer[ByteCodeInfo]
-        parametersInfo.append(parameterInfo)
-        byteCodeInfo.parametersByteCodeInfo = Option(parametersInfo)
-    }*/
     var new_info = new ByteCodeInfo()
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
     var op = operands.last
@@ -129,9 +114,9 @@ object FirstCode {
     var methodAndClass = new MethodAndClass()
     var classNames = new ListBuffer[String]()
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
-    /*operands.foreach{
+    operands.foreach{
       case result.domain.DomainInitializedArrayValueTag(v) =>
-        //getMethodParameters(v.origin, pc, v.length.get, methodAndClass, body)
+        getValuesOfParameters(v.origin, pc, methodAndClass ,body, result)
       case op@result.domain.DomainReferenceValueTag(v) =>
         if (v.allValues.exists(p =>
           p.upperTypeBound.containsId(ObjectType.Class.id))) {
@@ -141,7 +126,7 @@ object FirstCode {
           })
         }
       case _ =>
-    }*/
+    }
   }
 
   def getInfosFromSet(pc: Integer, body: Code, obj: ReflectionSet, byteCodeInfo: ByteCodeInfo, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
@@ -194,6 +179,7 @@ object FirstCode {
       byteCodeInfo.pc = org
       if (org < 0){
         checkOriginValue(org, obj)
+        getNameOfLocalVariable(org, obj.method)
         return
       }
       val operands = result.operandsArray(org)
@@ -222,6 +208,10 @@ object FirstCode {
           obj.valueObject.append("new " + instruction_new.objectType.simpleName + "()")
         case _ =>
           operands.head match {
+            case result.domain.MultipleReferenceValues(v) =>
+              // can't handle this situation
+              obj.isValid = false
+              return
             case result.domain.DomainReferenceValueTag(v) =>
               result.domain.originsIterator(operands.head).foreach(org =>
                 getNameOfLocalVariable(org, obj.method)
@@ -288,15 +278,16 @@ object FirstCode {
         val methodInfo = ct_method.getMethodInfo
         val ca = methodInfo.getCodeAttribute
         val lva = ca.getAttribute(LocalVariableAttribute.tag).asInstanceOf[LocalVariableAttribute]
+        if (lva == null) return
         val name = lva.variableName(pc)
         println(lva)
       } else {
         val ct_method = cc.getDeclaredMethod(method.name)
         val methodInfo = ct_method.getMethodInfo
-        val const_pool = methodInfo.getCodeAttribute.getConstPool
-        val lva = new LocalVariableAttribute(const_pool)
+        val ca = methodInfo.getCodeAttribute
+        val lva = ca.getAttribute(LocalVariableAttribute.tag).asInstanceOf[LocalVariableAttribute]
+        if (lva == null) return
         val name = lva.variableName(pc)
-        println(lva)
       }
     } catch{
       case e: NotFoundException =>
@@ -317,24 +308,54 @@ object FirstCode {
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
     var op = operands.head
     var classConstructor = new ClassConstructor()
-    op match {
-      case result.domain.DomainInitializedArrayValueTag(v) =>
-        val array_length = v.length.get
-        if (array_length > 0) {
-          var param_list = new ListBuffer[ByteCodeInfo]()
-          byteCodeInfo.parametersByteCodeInfo = Option(param_list)
-          getTypeParametersOfMethod(v.origin, origin, array_length, classConstructor, byteCodeInfo, body)
-        }
-      case _ =>
-    }
-    if (!obj.isValid) return
-    result.domain.originsIterator(operands.last).foreach(org => {
-      getClassInfos(org, classNames, obj, new_info, body, result)
+    operands.foreach( op => {
       if (!obj.isValid) return
+      if (!op.equals(operands.last)){
+        op match {
+          case result.domain.DomainInitializedArrayValueTag(v) =>
+            val array_length = v.length.get
+            if (array_length > 0) {
+              var param_list = new ListBuffer[ByteCodeInfo]()
+              byteCodeInfo.parametersByteCodeInfo = Option(param_list)
+              getTypeParametersOfMethod(v.origin, origin, array_length, classConstructor, byteCodeInfo, body)
+            }
+          case result.domain.MultipleReferenceValues(v) =>
+            obj.isValid = false
+            return
+          case result.domain.DomainArrayValueTag(v) =>
+            v.originsIterator.foreach(org => {
+              if (org < 0) {
+                obj.isValid = false
+                return
+              }
+              val instr = body.instructions(org)
+              instr.opcode match {
+                case GETSTATIC.opcode | GETFIELD.opcode =>
+                  obj.isValid = false
+                  return
+                case _ =>
+              }
+            })
+          case _ =>
+        }
+      }
     })
+
+    if (!obj.isValid) return
+    op = operands.last
+    op match {
+      case result.domain.MultipleReferenceValues(v) =>
+        obj.isValid = false
+        return
+      case _ =>
+        result.domain.originsIterator(op).foreach(org => {
+          getClassInfos(org, classNames, obj, new_info, body, result)
+          if (!obj.isValid) return
+        })
+    }
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
     if (obj.isValid) {
-      classConstructor.className = classNames
+      classConstructor.className = classNames.last
       obj.classConstructor = Option(classConstructor)
     }
   }
@@ -351,14 +372,9 @@ object FirstCode {
     var classNames = new ListBuffer[String]()
     var new_info = new ByteCodeInfo()
     instruction.opcode match {
-      case GETFIELD.opcode =>
-        val invoke = instruction.asInstanceOf[GETFIELD]
-        methodAndClass.methodName = invoke.name
-        classNames.append(invoke.declaringClass.fqn)
-      case GETSTATIC.opcode =>
-        val invoke = instruction.asInstanceOf[GETSTATIC]
-        methodAndClass.methodName = invoke.name
-        classNames.append(invoke.declaringClass.fqn)
+      case GETFIELD.opcode | GETSTATIC.opcode=>
+        obj.isValid = false
+        return
       case INVOKEVIRTUAL.opcode |
            INVOKESPECIAL.opcode |
            INVOKESTATIC.opcode |
@@ -400,17 +416,30 @@ object FirstCode {
     }
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
     if (obj.isValid) {
-      methodAndClass.className = classNames
+      methodAndClass.className = classNames.last
       obj.methodAndClass = Option(methodAndClass)
     }
   }
 
-  def getValuesOfParameters(start: Int, end: Int, obj: MethodAndClass, body: Code): Unit = {
-    val nextPc = body.pcOfNextInstruction(start)
-    if (nextPc == end)
+  def getValuesOfParameters(start: Int, end: Int, obj: MethodAndClass, body: Code, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+    val prePc = body.pcOfPreviousInstruction(end)
+    if (prePc == start)
       return
-    val instruction = body.instructions(nextPc)
+    val instruction = body.instructions(prePc)
+    instruction match {
+      case AASTORE =>
+        var info = ""
+        var new_info = new ByteCodeInfo()
+        analyseParameter(body.pcOfPreviousInstruction(prePc), info, new_info, body, result)
+      case _ =>
+        getValuesOfParameters(start, prePc, obj, body, result)
+    }
+  }
 
+  def analyseParameter(pc: Int, info: String, byteCodeInfo: ByteCodeInfo, body: Code, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}) : Unit = {
+    val operands = result.operandsArray(pc)
+    val instruction = body.instructions(pc)
+    byteCodeInfo.setInfo(pc, instruction)
 
   }
 
@@ -454,7 +483,8 @@ object FirstCode {
     val instruction = body.instructions(origin)
     byteCodeInfo.instruction = instruction
     val operands = result.operandsArray(origin)
-    if (operands == null) {
+    if (operands == null || operands.equals(Naught)) {
+      obj.isValid = false
       return
     }
     var new_info = new ByteCodeInfo()
@@ -474,24 +504,24 @@ object FirstCode {
         fieldAndClass.fieldName = s
         lst.append(paramInfo)
         byteCodeInfo.parametersByteCodeInfo = Option(lst)
+      case result.domain.MultipleReferenceValues(v) =>
+        obj.isValid = false
+        return
       case op@result.domain.DomainReferenceValueTag(v) =>
-        v.allValues.foreach(p => {
-          if (p.upperTypeBound.containsId(ObjectType.String.id))
+        if (op.equals(operands.last)) {
+          result.domain.originsIterator(op).foreach(org => {
+            if (fieldAndClass.fieldName == "") return
+            getClassInfos(org, classNames, obj, new_info, body, result)
+          })
+        } else
             result.domain.originsIterator(op).foreach(org => {
               setFieldToObject(org, obj, new_info, body, result)
             })
-          if (p.upperTypeBound.containsId(ObjectType.Class.id)) {
-            result.domain.originsIterator(op).foreach(org => {
-              if (fieldAndClass.fieldName == "") return
-              getClassInfos(org, classNames, obj, new_info, body, result)
-            })
-          }
-        })
       case _ =>
     }
     byteCodeInfo.previousByteCodeInfo = Option(new_info)
     if (obj.isValid) {
-      fieldAndClass.className = classNames
+      fieldAndClass.className = classNames.last
       obj.fieldAndClass = Option(fieldAndClass)
     }
   }
@@ -517,6 +547,23 @@ object FirstCode {
       case loadClass: LoadClass =>
         val value = loadClass.value
         classNames.append(value.asObjectType.fqn)
+      case getStatic: GETSTATIC =>
+        obj.isValid = false
+        return
+      case getfield: GETFIELD =>
+        obj.isValid = false
+        return
+      case invokeVirtual: INVOKEVIRTUAL =>
+        if (operands.last.equals(operands.last) && (invokeVirtual.name == "get")) {
+          operands.head match {
+            case result.domain.MultipleReferenceValues(v) =>
+              obj.isValid = false
+              return
+            case result.domain.DomainReferenceValueTag(v) =>
+              classNames.append(v.upperTypeBound.head.asInstanceOf[ObjectType].fqn)
+            case _ =>
+          }
+        }
       case _ =>
     }
     instruction.opcode match {
@@ -537,7 +584,7 @@ object FirstCode {
             var new_info = new ByteCodeInfo()
             byteCodeInfo.previousByteCodeInfo = Option(new_info)
             result.domain.originsIterator(operands.last).foreach(org =>
-              getAnotherInfos(org, obj, new_info, body, result)
+              getAnotherInfos(org, new_info, body, result)
             )
           } else {
             var new_info = new ByteCodeInfo()
@@ -569,25 +616,12 @@ object FirstCode {
                   classNames.append(s)
                   lst.append(param_info)
                 case result.domain.MultipleReferenceValues(v) =>
-                  var multi_param = new MultiByteCodeInfo()
-                  lst.append(multi_param)
-                  if (v.filter(p => p.upperTypeBound.containsId(ObjectType.String.id)).nonEmpty) {
-                    result.domain.originsIterator(op).foreach(org => {
-                      var new_info = new ByteCodeInfo()
-                      multi_param.values.append(new_info)
-                      getClassName(org, classNames, obj, new_info, body, result)
-                    })
-                  } else {
-                    result.domain.originsIterator(op).foreach(org => {
-                      var new_info = new ByteCodeInfo()
-                      multi_param.values.append(new_info)
-                      getAnotherInfos(org, obj, new_info, body, result)
-                    })
-                  }
+                  obj.isValid = false
+                  return
                 case result.domain.DomainReferenceValueTag(v) =>
                     lst.append(param_info)
                     result.domain.originsIterator(op).foreach(org => {
-                      getAnotherInfos(org, obj, param_info, body, result)
+                      getAnotherInfos(org, param_info, body, result)
                     })
                 case _ =>
               }
@@ -601,7 +635,7 @@ object FirstCode {
                 })
               } else {
                 result.domain.originsIterator(op).foreach(org => {
-                  getAnotherInfos(org, obj, new_info, body, result)
+                  getAnotherInfos(org, new_info, body, result)
                 })
               }
             }
@@ -612,7 +646,7 @@ object FirstCode {
     }
 }
 
-def getAnotherInfos(org: Int, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, body: Code,
+def getAnotherInfos(org: Int, byteCodeInfo: ByteCodeInfo, body: Code,
                     result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
   byteCodeInfo.pc = org
   if (org < 0) return
@@ -622,7 +656,7 @@ def getAnotherInfos(org: Int, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, bo
   if (operands == null) return
   var lst = new ListBuffer[ByteCodeInfo]()
   operands.foreach(op =>
-    if (!op.equals(operands.last)) {
+    if (!op.equals(operands.last)){
       var param_info = new ByteCodeInfo()
       lst.append(param_info)
       op match {
@@ -630,15 +664,10 @@ def getAnotherInfos(org: Int, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, bo
           val org = result.domain.origins(op).head
           param_info.setInfo(org, body.instructions(org))
         case result.domain.MultipleReferenceValues(v) =>
-          var multi_param = new MultiByteCodeInfo()
-          result.domain.originsIterator(op).foreach(org => {
-            var new_info = new ByteCodeInfo()
-            multi_param.values.append(new_info)
-            getAnotherInfos(org, obj, new_info, body, result)
-          })
+          return
         case result.domain.DomainReferenceValueTag(v) =>
           result.domain.originsIterator(op).foreach(org => {
-            getAnotherInfos(org, obj, param_info, body, result)
+            getAnotherInfos(org, param_info, body, result)
           })
         case _ =>
       }
@@ -646,7 +675,7 @@ def getAnotherInfos(org: Int, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, bo
       var new_info = new ByteCodeInfo()
       byteCodeInfo.previousByteCodeInfo = Option(new_info)
       result.domain.originsIterator(op).foreach(org => {
-        getAnotherInfos(org, obj, new_info, body, result)
+        getAnotherInfos(org, new_info, body, result)
       })
     }
   )

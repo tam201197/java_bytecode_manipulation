@@ -1,7 +1,7 @@
 import scala.collection.mutable.ListBuffer
 
 trait ObjectCalledByReflection {
-  var className: ListBuffer[String]
+  var className: String
   var parametersType: ListBuffer[String]
   var parametersPC: ListBuffer[Int]
 

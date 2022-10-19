@@ -17,11 +17,11 @@ class ReflectionSetAccessible extends ReflectionUse{
 
   def setClassName(className: String): Unit = {
     if (methodAndClass.isDefined){
-      methodAndClass.get.className.append(className)
+      methodAndClass.get.className = className
     } else if (fieldAndClass.isDefined){
-      fieldAndClass.get.className.append(className)
+      fieldAndClass.get.className = className
     } else if (classConstructor.isDefined) {
-      classConstructor.get.className.append(className)
+      classConstructor.get.className = className
     }
   }
 
