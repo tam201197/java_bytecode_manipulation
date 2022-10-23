@@ -1,8 +1,7 @@
-import scala.collection.mutable.ListBuffer
 import org.opalj.br._
 
 class ReflectionSet extends ReflectionUse {
-  override var className: String = ""
+  override var className: String = _
   override var method: Method = _
   override var nameReflectionFunction: Option[String] = None
   override var byteCodeInfo: Option[ByteCodeInfo] = None
@@ -10,8 +9,8 @@ class ReflectionSet extends ReflectionUse {
   override var methodAndClass: Option[MethodAndClass] = None
   override var classConstructor: Option[ClassConstructor] = None
   override var isValid: Boolean = true
-  var modifiedObject: ListBuffer[String] = new ListBuffer[String]()
-  var valueObject: ListBuffer[String] = new ListBuffer[String]()
-  var objectInfo: ListBuffer[ByteCodeInfo] = new ListBuffer[ByteCodeInfo]()
-  var valueInfo: ListBuffer[ByteCodeInfo] = new ListBuffer[ByteCodeInfo]()
+  var modifiedObject: String = _
+  var valueObject: String = _
+  var objectInfo: ByteCodeInfo = _
+  var valueInfo: ByteCodeInfo = _
 }
