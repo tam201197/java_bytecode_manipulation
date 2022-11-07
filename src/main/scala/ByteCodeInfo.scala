@@ -10,4 +10,5 @@ class ByteCodeInfo {
     this.pc = pc
     this.instruction = instruction
   }
+  var multiPreByteCodeInfo: ListBuffer[ByteCodeInfo] = new ListBuffer[ByteCodeInfo]()
 }
