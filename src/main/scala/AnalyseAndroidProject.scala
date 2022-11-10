@@ -65,7 +65,6 @@ class AnalyseAndroidProject(projectJAR:String) {
             }
             setObjects += obj
           }
-
         }
       }
     }
@@ -144,7 +143,7 @@ class AnalyseAndroidProject(projectJAR:String) {
       case result.domain.DomainReferenceValueTag(v) =>
         result.domain.originsIterator(op).foreach(org => {
           var info = new StringBuilder()
-          getParameterInReflectionSet(org, body, obj, new_info, info, result)
+          getInfoParameterAsObject(org, body, obj, new_info, info, result)
           if (obj.isValid){
             obj.valueObjects.append(info.toString())
             obj.valueInfo.append(new_info)
@@ -161,7 +160,7 @@ class AnalyseAndroidProject(projectJAR:String) {
         case result.domain.DomainReferenceValueTag(v) =>
           result.domain.originsIterator(op).foreach(org => {
             var info = new StringBuilder()
-            getParameterInReflectionSet(org, body, obj, new_info, info, result)
+            getInfoParameterAsObject(org, body, obj, new_info, info, result)
             if (obj.isValid){
               obj.modifiedObject = info.toString()
               obj.objectInfo = new_info
@@ -191,11 +190,11 @@ class AnalyseAndroidProject(projectJAR:String) {
       case result.domain.IntegerRange(v) =>
         println(v.toString())
       case result.domain.MultipleReferenceValues(v) =>
-        setMultipleByteCodeInfo(v.idSet, value_param, body, result)
+        setMultipleByteCodeInfo(v.idSet, obj, value_param, body, result)
         obj.isValid = false
       case result.domain.DomainReferenceValueTag(v) =>
         result.domain.originsIterator(value_operand).foreach(org => {
-          getParameterInReflectionSet(org, body, obj, value_param, info, result)
+          getInfoParameterAsObject(org, body, obj, value_param, info, result)
           obj.valueObject = info.toString()
           obj.valueInfo = value_param
         })
@@ -217,7 +216,7 @@ class AnalyseAndroidProject(projectJAR:String) {
         return
       case result.domain.DomainReferenceValueTag(v) =>
         result.domain.originsIterator(value_operand).foreach(org => {
-          getParameterInReflectionSet(org, body, obj, object_param, info, result)
+          getInfoParameterAsObject(org, body, obj, object_param, info, result)
           obj.modifiedObject = info.toString()
           obj.objectInfo = object_param
         })
@@ -240,8 +239,8 @@ class AnalyseAndroidProject(projectJAR:String) {
     )
   }
 
-  def getParameterInReflectionSet(origin: Int, body: Code, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, info: StringBuilder,
-                                  result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+  def getInfoParameterAsObject(origin: Int, body: Code, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, info: StringBuilder,
+                               result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     byteCodeInfo.pc = origin
     if (origin < 0) {
       checkOriginValue(origin, obj, info)
@@ -256,10 +255,16 @@ class AnalyseAndroidProject(projectJAR:String) {
         val invoke = instruction.asMethodInvocationInstruction
         val class_name = invoke.declaringClass.toJava
         val method_name = invoke.name
-        if (class_name.equals(obj.className))
-          info.append("this." + method_name)
-        else {
-          info.append(class_name.split('.').last + "." + method_name)
+        if (method_name == "valueOf"){
+          var new_info = new ByteCodeInfo()
+          byteCodeInfo.previousByteCodeInfo = Option(new_info)
+          workWithFunctionValueOf(origin, body,new_info, result)
+        } else {
+          if (class_name.equals(obj.className))
+            info.append("this." + method_name)
+          else {
+            info.append(class_name.split('.').last + "." + method_name)
+          }
         }
       case INVOKEVIRTUAL.opcode |
            INVOKESPECIAL.opcode |
@@ -275,10 +280,54 @@ class AnalyseAndroidProject(projectJAR:String) {
         val get_static = instruction.asInstanceOf[GETSTATIC]
         info.append("this." + get_static.name)
       case NEW.opcode =>
-        val instruction_new = instruction.asInstanceOf[NEW]
-        info.append("new " + instruction_new.objectType.simpleName + "()")
+        var next_pc = body.pcOfNextInstruction(origin)
+        var instr = body.instructions(next_pc)
+        var count = 0
+        while (instr.isInstanceOf[INVOKESPECIAL] && instr.asInvocationInstruction.name != "<init>"){
+          next_pc = body.pcOfNextInstruction(next_pc)
+          instr = body.instructions(next_pc)
+          count += 1
+        }
+        if (count == 1){
+          info.append("new " + instruction.asNEW.objectType.simpleName + "()")
+        }
+        val operands = result.operandsArray(next_pc)
+        var lst = new ListBuffer[ByteCodeInfo]()
+        byteCodeInfo.parametersByteCodeInfo = Option(lst)
+        operands.foreach(op => {
+          if(op.equals(operands.last)) return
+          var info = new ByteCodeInfo()
+          lst.append(info)
+          op match {
+            case result.domain.MultipleReferenceValues(v) =>
+              setMultipleByteCodeInfo(v.idSet, obj, info, body, result)
+            case result.domain.DomainReferenceValueTag(v) =>
+              result.domain.originsIterator(op).foreach(org =>
+                getAnotherInfos(org, obj, info, body, result)
+              )
+            case result.domain.DomainInitializedArrayValueTag(v) =>
+              info.setInfo(v.origin, body.instructions(v.origin))
+              if (v.theLength > 0){
+                println("need to work with array")
+              }
+            case _ =>
+        }
+        })
       case _ =>
-        obj.isValid = false
+    }
+  }
+
+  def workWithFunctionValueOf(origin: Int, body: Code, info: ByteCodeInfo, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+    val pre_pc = body.pcOfPreviousInstruction(origin)
+    val instruction = body.instructions(pre_pc)
+    info.setInfo(pre_pc, instruction)
+    if (instruction.isLoadConstantInstruction){
+      println("no solution")
+    } else if (instruction.isLoadLocalVariableInstruction){
+      val indexOfReadLocal = instruction.asLoadLocalVariableInstruction.indexOfReadLocal
+      println(indexOfReadLocal)
+    } else {
+      println("no solution")
     }
   }
 
@@ -497,7 +546,7 @@ class AnalyseAndroidProject(projectJAR:String) {
             }
           case result.domain.MultipleReferenceValues(v) =>
             obj.isValid = false
-            setMultipleByteCodeInfo(v.idSet, byteCodeInfo, body, result)
+            setMultipleByteCodeInfo(v.idSet, obj, byteCodeInfo, body, result)
           case result.domain.DomainArrayValueTag(v) =>
             v.originsIterator.foreach(org => {
               if (org < 0) {
@@ -604,7 +653,7 @@ class AnalyseAndroidProject(projectJAR:String) {
                                   body: Code, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     if (origins.iterator.length > 2){
       obj.isValid = false
-      setMultipleByteCodeInfo(origins, byteCodeInfo, body, result)
+      setMultipleByteCodeInfo(origins, obj, byteCodeInfo, body, result)
     } else {
       var new_info = new ByteCodeInfo()
       origins.foreachPair((i1, i2) => {
@@ -618,7 +667,7 @@ class AnalyseAndroidProject(projectJAR:String) {
           getClassInfos(i1, classNames, obj, byteCodeInfo, body, result)
         } else {
           obj.isValid = false
-          setMultipleByteCodeInfo(origins, byteCodeInfo, body, result)
+          setMultipleByteCodeInfo(origins, obj, byteCodeInfo, body, result)
         }
       })
     }
@@ -812,7 +861,7 @@ class AnalyseAndroidProject(projectJAR:String) {
             var new_info = new ByteCodeInfo()
             byteCodeInfo.previousByteCodeInfo = Option(new_info)
             result.domain.originsIterator(operands.last).foreach(org =>
-              getAnotherInfos(org, new_info, body, result)
+              getAnotherInfos(org, obj, new_info, body, result)
             )
           } else {
             var new_info = new ByteCodeInfo()
@@ -855,7 +904,7 @@ class AnalyseAndroidProject(projectJAR:String) {
                     if (instr.isInvocationInstruction && instr.asInvocationInstruction.name == "getName"){
                       getClassInfos(org, classNames, obj, param_info, body, result)
                     } else
-                      getAnotherInfos(org, param_info, body, result)
+                      getAnotherInfos(org, obj, param_info, body, result)
                   })
                 case _ =>
               }
@@ -869,7 +918,7 @@ class AnalyseAndroidProject(projectJAR:String) {
                 })
               } else {
                 result.domain.originsIterator(op).foreach(org => {
-                  getAnotherInfos(org, new_info, body, result)
+                  getAnotherInfos(org, obj, new_info, body, result)
                 })
               }
             }
@@ -880,19 +929,22 @@ class AnalyseAndroidProject(projectJAR:String) {
     }
   }
 
-  def setMultipleByteCodeInfo(origins: IntTrieSet, byteCodeInfo: ByteCodeInfo, body: Code,
+  def setMultipleByteCodeInfo(origins: IntTrieSet, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, body: Code,
                               result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit ={
     origins.foreach(org => {
       var new_info= new ByteCodeInfo()
       byteCodeInfo.multiPreByteCodeInfo.append(new_info)
-      getAnotherInfos(org, new_info, body, result)
+      getAnotherInfos(org, obj, new_info, body, result)
     })
   }
 
-  def getAnotherInfos(org: Int, byteCodeInfo: ByteCodeInfo, body: Code,
+  def getAnotherInfos(org: Int, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, body: Code,
                       result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     byteCodeInfo.pc = org
-    if (org < 0) return
+    if (org < 0) {
+      obj.isValid = false
+      return
+    }
     val instruction = body.instructions(org)
     byteCodeInfo.instruction = instruction
     val operands = result.operandsArray(org)
@@ -910,7 +962,7 @@ class AnalyseAndroidProject(projectJAR:String) {
             return
           case result.domain.DomainReferenceValueTag(v) =>
             result.domain.originsIterator(op).foreach(org => {
-              getAnotherInfos(org, param_info, body, result)
+              getAnotherInfos(org, obj, param_info, body, result)
             })
           case _ =>
         }
@@ -922,7 +974,7 @@ class AnalyseAndroidProject(projectJAR:String) {
             var new_info = new ByteCodeInfo()
             byteCodeInfo.previousByteCodeInfo = Option(new_info)
             result.domain.originsIterator(op).foreach(org => {
-              getAnotherInfos(org, new_info, body, result)
+              getAnotherInfos(org, obj, new_info, body, result)
             })
           case _ =>
         }
@@ -1002,7 +1054,7 @@ object FirstCode{
   def main(args: Array[String]): Unit = {
     val projectJAR = "C:/Users/tam20/java_bytecode_manipulation/project/project/target/lib/test-dex2jar.jar"
     val testJAR = "C:/Users/tam20/java_bytecode_manipulation/src/test/scala/myOwnJarFile.jar"
-    val temp = new AnalyseAndroidProject(testJAR)
+    val temp = new AnalyseAndroidProject(projectJAR)
     temp.to_analyse()
   }
 }
