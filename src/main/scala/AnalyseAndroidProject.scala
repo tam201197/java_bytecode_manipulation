@@ -37,7 +37,7 @@ class AnalyseAndroidProject(projectJAR:String) {
             var obj = new ReflectionInvoke()
             makeReflectionUseObject(pc, instr, method, obj, byteCodeInfo)
             methodCallReflectionInvoke += method
-            if (invokeObjects.length == 60)
+            if (invokeObjects.length == 63)
               println(invokeObjects.length)
             getInfosFromInvoke(pc, body, obj, byteCodeInfo, result)
             if (obj.isValid){
@@ -124,16 +124,17 @@ class AnalyseAndroidProject(projectJAR:String) {
     result.domain.originsIterator(operands.last).foreach(org => {
       setMethodToObject(org, obj, new_info, body, result)
     })
-
+    var lst = new ListBuffer[ByteCodeInfo]()
+    byteCodeInfo.parametersByteCodeInfo = Option(lst)
     var iter = operands.toIterator
     var op = iter.next()
     op match {
       case result.domain.DomainInitializedArrayValueTag(v) =>
         if (v.theLength > 0){
-          var list_params = new ListBuffer[String]()
           var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
           workWithInstructionANewArray(v.theLength, v.origin, obj, body, byteCodeInfoWithArray, result)
           obj.valueInfo = byteCodeInfoWithArray.values
+          lst.append(byteCodeInfoWithArray)
         }
       case result.domain.MultipleReferenceValues(v) =>
         obj.isValid = false
@@ -141,27 +142,28 @@ class AnalyseAndroidProject(projectJAR:String) {
       case result.domain.DomainReferenceValueTag(v) =>
         result.domain.originsIterator(op).foreach(org => {
           var info = new StringBuilder()
-          getInfoParameterAsObject(org, body, obj, new_info, info, result)
-          if (obj.isValid){
-            obj.objectInfo = new_info
-          }
+          var n_info = new ByteCodeInfo()
+          lst.append(n_info)
+          getInfoParameterAsObject(org, body, obj, n_info, info, result)
+          obj.valueInfo.append(n_info)
         })
       case _ =>
     }
     op = iter.next()
     while (iter.hasNext && !op.equals(operands.last)){
+      var n_info = new ByteCodeInfo()
       op match {
         case result.domain.MultipleReferenceValues(v) =>
           obj.isValid = false
-          return
+          setMultipleByteCodeInfo(v.idSet, obj, n_info, body, result)
+          lst.append(n_info)
         case result.domain.DomainReferenceValueTag(v) =>
           result.domain.originsIterator(op).foreach(org => {
             var info = new StringBuilder()
-            getInfoParameterAsObject(org, body, obj, new_info, info, result)
-            if (obj.isValid){
-              obj.modifiedObject = info.toString()
-              obj.objectInfo = new_info
-            }
+            getInfoParameterAsObject(org, body, obj, n_info, info, result)
+            obj.modifiedObject = info.toString()
+            obj.objectInfo = n_info
+            lst.append(n_info)
           })
         case _ =>
       }
@@ -184,8 +186,6 @@ class AnalyseAndroidProject(projectJAR:String) {
     lst.append(value_param)
     var info = new StringBuilder()
     value_operand match {
-      case result.domain.IntegerRange(v) =>
-        println(v.toString())
       case result.domain.MultipleReferenceValues(v) =>
         setMultipleByteCodeInfo(v.idSet, obj, value_param, body, result)
         obj.isValid = false
@@ -206,8 +206,6 @@ class AnalyseAndroidProject(projectJAR:String) {
     var object_operand = operands(1)
     info = new StringBuilder()
     object_operand match {
-      case result.domain.IntegerRange(v) =>
-        println(v.toString())
       case result.domain.MultipleReferenceValues(v) =>
         obj.isValid = false
         return
@@ -293,21 +291,25 @@ class AnalyseAndroidProject(projectJAR:String) {
         byteCodeInfo.parametersByteCodeInfo = Option(lst)
         operands.foreach(op => {
           if(op.equals(operands.last)) return
-          var info = new ByteCodeInfo()
-          lst.append(info)
           op match {
             case result.domain.MultipleReferenceValues(v) =>
+              var info = new ByteCodeInfo()
+              lst.append(info)
               setMultipleByteCodeInfo(v.idSet, obj, info, body, result)
             case result.domain.DomainReferenceValueTag(v) =>
+              var info = new ByteCodeInfo()
+              lst.append(info)
               result.domain.originsIterator(op).foreach(org =>
                 getAnotherInfos(org, obj, info, body, result)
               )
             case result.domain.DomainInitializedArrayValueTag(v) =>
-              info.setInfo(v.origin, body.instructions(v.origin))
               if (v.theLength > 0){
-                println("need to work with array")
+                var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
+                workWithInstructionANewArray(v.theLength, v.origin, obj, body, byteCodeInfoWithArray, result)
+                lst.append(byteCodeInfoWithArray)
               }
             case _ =>
+              println("test")
         }
         })
       case _ =>
@@ -317,9 +319,8 @@ class AnalyseAndroidProject(projectJAR:String) {
   def workWithInstructionANewArray(array_length: Int, origin: Int, obj: ReflectionUse, body:Code, info: ByteCodeInfoWithArray, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     var pc = origin
     var count = 0
-    while (count == array_length){
+    while (count != array_length){
       var new_info = new ByteCodeInfo()
-      info.values.append(new_info)
       var instruction = body.instructions(pc)
       pc = body.pcOfNextInstruction(pc)
       instruction = body.instructions(pc)
@@ -327,7 +328,6 @@ class AnalyseAndroidProject(projectJAR:String) {
       while (instruction.opcode != AASTORE.opcode){
         instruction match {
           case DUP =>
-            count += 1
             for (x <- 0 to 1 ){
               pc = body.pcOfNextInstruction(pc)
               instruction = body.instructions(pc)
@@ -336,10 +336,15 @@ class AnalyseAndroidProject(projectJAR:String) {
             if (instruction.isLoadLocalVariableInstruction){
               var new_bInfo = new ByteCodeInfo()
               val indexOfReadLocal = instruction.asLoadLocalVariableInstruction.indexOfReadLocal
-              findInstructionStoreWithIndex(pc, indexOfReadLocal, obj, body, new_bInfo, result)
+              if(indexOfReadLocal == 0){
+                new_bInfo.setInfo(pc, instruction)
+              } else {
+                findInstructionStoreWithIndex(pc, indexOfReadLocal, obj, body, new_bInfo, result)
+              }
               byteCodeInfoOfValueInArray.values.append(new_bInfo)
             } else if (instruction.isInstanceOf[ANEWARRAY]){
               val pre_instruction = body.instructions(body.pcOfPreviousInstruction(pc))
+              byteCodeInfoOfValueInArray.values.dropRight(1)
               val a_length = pre_instruction.mnemonic.split('_')(1).toInt
               var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
               byteCodeInfoWithArray.setInfo(pc, instruction)
@@ -352,9 +357,12 @@ class AnalyseAndroidProject(projectJAR:String) {
               n_info.setInfo(pc, instruction)
               byteCodeInfoOfValueInArray.values.append(n_info)
             }
+            pc = body.pcOfNextInstruction(pc)
+            instruction = body.instructions(pc)
         }
         byteCodeInfoOfValueInArray.setInfo(pc, instruction)
       }
+      count += 1
       info.values.append(byteCodeInfoOfValueInArray)
     }
   }
@@ -394,92 +402,9 @@ class AnalyseAndroidProject(projectJAR:String) {
       obj.isValid = false
   }
 
-  def getParameterInReflectionInvoke(origin: Int, body: Code, obj: ReflectionInvoke, info: StringBuilder, byteCodeInfo: ByteCodeInfo,
-                                     old_origin: Int, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
-    if(origin < 0){
-      return
-    }
-    val operands = result.operandsArray(origin)
-    val old_operands = result.operandsArray(old_origin)
-    if (operands.equals(Naught) || old_operands.head.equals(old_operands.last)){
-      return
-    }
-    val stop_op = result.operandsArray(old_origin)(1)
-    if (operands.head.equals(stop_op)){
-      return
-    }
-    val instruction = body.instructions(origin)
-    byteCodeInfo.setInfo(origin, instruction)
-    instruction.opcode match {
-      case ACONST_NULL.opcode =>
-        info.insert(0, "null")
-      case GETFIELD.opcode =>
-        val get_field = instruction.asInstanceOf[GETFIELD]
-        info.insert(0, "this." + get_field.name)
-      case GETSTATIC.opcode =>
-        val get_static = instruction.asInstanceOf[GETSTATIC]
-        info.insert(0, "this." + get_static.name)
-      case AALOAD.opcode =>
-        if (instruction.asLoadLocalVariableInstruction.readsLocal) {
-          result.domain.originsIterator(operands.head).foreach(org =>{
-            var stringObject = new StringBuilder()
-            objectToString(org, stringObject, obj, byteCodeInfo, body, result)
-          })
-        }
-      case INVOKESTATIC.opcode =>
-        val invoke = instruction.asMethodInvocationInstruction
-        val class_name = invoke.declaringClass.toJava
-        val method_name = invoke.name
-        if (method_name == "valueOf"){
-          analyseFunctionValueOf(origin, body, obj, info, byteCodeInfo, old_origin, result)
-        }
-        if (class_name.equals(obj.className))
-          info.insert(0, "this." + method_name)
-        else {
-          info.insert(0, class_name.split('.').last + "." + method_name)
-        }
-      case INVOKEVIRTUAL.opcode |
-           INVOKESPECIAL.opcode |
-           INVOKEINTERFACE.opcode =>
-        val invoke = instruction.asMethodInvocationInstruction
-        val paramSize = invoke.methodDescriptor.parameterTypes.length
-        if (paramSize > 0) {
-          obj.isValid = false
-          return
-        }
-        info.insert(0, "." + invoke.name + "()")
-      case ANEWARRAY.opcode =>
-
-      case _ =>
-        if (instruction.isInstanceOf[LoadClass]){
-          info.insert(0, instruction.asInstanceOf[LoadClass].value.asObjectType.simpleName + (".class"))
-        }
-        println("test")
-    }
-  }
-
-  def analyseFunctionValueOf(origin: Int, body: Code, obj: ReflectionInvoke, info: StringBuilder, byteCodeInfo: ByteCodeInfo,
-                             old_origin: Int, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
-    val operands = result.operandsArray(origin)
-    val op = operands.head
-      if (op.equals(result.operandsArray(old_origin)(1))){
-      return
-    }
-    op match {
-      case result.domain.IntegerRange(s) =>
-        if (s._1.equals(s._2)){
-          info.append(s._2)
-        } else {
-          obj.isValid = false
-        }
-      case _ =>
-
-    }
-
-  }
-
   def objectToString(pc: Int, valueObject: StringBuilder, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, body: Code,
                      result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+    byteCodeInfo.pc = pc
     if (pc < 0) {
       if (pc == -1 && !obj.method.isStatic) {
         valueObject.insert(0, "this")
@@ -489,6 +414,7 @@ class AnalyseAndroidProject(projectJAR:String) {
     }
     val operands = result.operandsArray(pc)
     val instruction = body.instructions(pc)
+    byteCodeInfo.instruction = instruction
     if (operands.equals(Naught) || operands.head.equals(operands.last) ) {
       instruction.opcode match {
         case GETFIELD.opcode =>
@@ -512,33 +438,41 @@ class AnalyseAndroidProject(projectJAR:String) {
         case INVOKEVIRTUAL.opcode | INVOKESPECIAL.opcode | INVOKEINTERFACE.opcode =>
           val name = instruction.asInvocationInstruction.name
           valueObject.insert(0, "." + name + "()")
-          result.domain.originsIterator(operands.last).foreach(org =>
-            objectToString(org, valueObject, obj, byteCodeInfo, body, result)
-          )
+          result.domain.originsIterator(operands.last).foreach(org =>{
+            var new_info = new ByteCodeInfo()
+            byteCodeInfo.previousByteCodeInfo = Option(new_info)
+            objectToString(org, valueObject, obj, new_info, body, result)
+          })
         case _ =>
       }
     } else {
       val paramString = new StringBuilder()
-      var new_info = new ByteCodeInfo()
       operands.foreach(op => {
         if (instruction.isInstanceOf[INVOKESTATIC] | !op.equals(operands.last)) {
+          var new_info = new ByteCodeInfo()
           op match {
             case result.domain.StringValue(s) =>
+              result.domain.originsIterator(op).foreach(org => {
+                new_info.setInfo(org, body.instructions(org))
+                byteCodeInfo.previousByteCodeInfo = Option(new_info)
+              })
               createParamString(paramString, s, operands.head.equals(op))
             case result.domain.MultipleReferenceValues(v) =>
               obj.isValid = false
-              return
+              setMultipleByteCodeInfo(v.idSet, obj, byteCodeInfo, body, result)
             case result.domain.ClassValue(v) =>
+              result.domain.originsIterator(op).foreach(org => {
+               new_info.setInfo(org, body.instructions(org))
+                byteCodeInfo.previousByteCodeInfo = Option(new_info)
+              })
               createParamString(paramString, v.asObjectType.simpleName + ".class", operands.head.equals(op))
             case result.domain.DomainReferenceValueTag(v) =>
-              result.domain.originsIterator(op).foreach(org =>
+              result.domain.originsIterator(op).foreach(org =>{
+                getAnotherInfos(org, obj, new_info, body, result)
                 if (org == -1 && !obj.method.isStatic) {
                   createParamString(paramString, "this", operands.head.equals(op))
-                } else {
-                  obj.isValid = false
-                  return
-                }
-              )
+                } else return
+              })
             case _ =>
               obj.isValid = false
               return
@@ -550,9 +484,11 @@ class AnalyseAndroidProject(projectJAR:String) {
               val invoke = instruction.asInvocationInstruction
               paramString.insert(0, "." + invoke.name)
               valueObject.insert(0, paramString)
-              result.domain.originsIterator(op).foreach(org =>
+              result.domain.originsIterator(op).foreach(org =>{
+                var new_info = new ByteCodeInfo()
+                byteCodeInfo.previousByteCodeInfo = Option(new_info)
                 objectToString(org, valueObject, obj, byteCodeInfo, body, result)
-              )
+              })
             case _ =>
               println("test")
           }
@@ -602,8 +538,10 @@ class AnalyseAndroidProject(projectJAR:String) {
             val array_length = v.length.get
             if (array_length > 0) {
               var param_list = new ListBuffer[ByteCodeInfo]()
+              var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
+              getTypeParametersOfMethod(v.origin, origin, array_length, classConstructor, byteCodeInfoWithArray, body)
+              param_list.append(byteCodeInfoWithArray)
               byteCodeInfo.parametersByteCodeInfo = Option(param_list)
-              getTypeParametersOfMethod(v.origin, origin, array_length, classConstructor, byteCodeInfo, body)
             }
           case result.domain.MultipleReferenceValues(v) =>
             obj.isValid = false
@@ -663,6 +601,7 @@ class AnalyseAndroidProject(projectJAR:String) {
         if (operands == null) {
           return
         }
+        var lst = new ListBuffer[ByteCodeInfo]()
         operands.foreach( op =>
         {
           if (op.equals(operands.last)) {
@@ -680,19 +619,18 @@ class AnalyseAndroidProject(projectJAR:String) {
           } else {
             op match {
               case result.domain.StringValue(s) =>
-                var lst = new ListBuffer[ByteCodeInfo]()
                 var paramInfo = new ByteCodeInfo
                 val org = result.domain.origins(op).head
                 paramInfo.setInfo(org, body.instructions(org))
                 methodAndClass.methodName = s
                 lst.append(paramInfo)
-                byteCodeInfo.parametersByteCodeInfo = Option(lst)
               case result.domain.DomainInitializedArrayValueTag(v) =>
                 val param_length = v.length.get
                 if (param_length > 0) {
-                  var lst = new ListBuffer[ByteCodeInfo]()
-                  byteCodeInfo.parametersByteCodeInfo = Option(lst)
-                  getTypeParametersOfMethod(v.origin, origin, v.length.get, methodAndClass, byteCodeInfo, body)
+                  var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
+                  getTypeParametersOfMethod(v.origin, origin, v.length.get, methodAndClass, byteCodeInfoWithArray, body)
+                  byteCodeInfoWithArray.setInfo(v.origin, body.instructions(v.origin))
+                  lst.append(byteCodeInfoWithArray)
                 }
               case _ =>
                 obj.isValid = false
@@ -700,6 +638,7 @@ class AnalyseAndroidProject(projectJAR:String) {
             }
           }
         })
+        byteCodeInfo.parametersByteCodeInfo = Option(lst)
       case _ =>
         obj.isValid = false
         return
@@ -734,32 +673,7 @@ class AnalyseAndroidProject(projectJAR:String) {
     }
   }
 
-  def getValuesOfParameters(start: Int, end: Int, obj: ReflectionInvoke, info_list: ListBuffer[String], info: StringBuilder ,body: Code,
-                            result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
-    val prePc = body.pcOfPreviousInstruction(end)
-    if (prePc == start || !obj.isValid)
-      return
-    val instruction = body.instructions(end)
-    instruction match {
-      case AASTORE =>
-        info.setLength(0)
-        var new_info = new ByteCodeInfo()
-        val operands = result.operandsArray(end)
-        val op = operands.head
-        val next_op = operands(1)
-        result.domain.originsIterator(op).foreach(org => {
-          getParameterInReflectionInvoke(org, body, obj, info, new_info, org, result)
-        })
-      case DUP =>
-        if (obj.isValid && info.nonEmpty){
-          info_list.insert(0, info.toString())
-        }
-      case _ =>
-    }
-    getValuesOfParameters(start, prePc, obj, info_list, info, body, result)
-  }
-
-  def getTypeParametersOfMethod(start: Integer, end: Integer, count: Integer, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfo, body: Code): Unit = {
+  def getTypeParametersOfMethod(start: Integer, end: Integer, count: Integer, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfoWithArray, body: Code): Unit = {
     val nextPc = body.pcOfNextInstruction(start)
     if (count == 0 || nextPc == end)
       return
@@ -786,12 +700,12 @@ class AnalyseAndroidProject(projectJAR:String) {
     getTypeParametersOfMethod(nextPc, end, new_count, obj, byteCodeInfo, body)
   }
 
-  def saveParametersInfoInByteCodeInfo(pc: Int, param: String, instruction: Instruction, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfo): Unit = {
+  def saveParametersInfoInByteCodeInfo(pc: Int, param: String, instruction: Instruction, obj: ObjectCalledByReflection, byteCodeInfo: ByteCodeInfoWithArray): Unit = {
     obj.addParametersPC(pc)
     obj.addParametersType(param)
     val new_info = new ByteCodeInfo()
     new_info.setInfo(pc, instruction)
-    byteCodeInfo.parametersByteCodeInfo.get.append(new_info)
+    byteCodeInfo.values.append(new_info)
   }
 
   def setFieldToObject(origin: Integer, obj: ReflectionUse, byteCodeInfo: ByteCodeInfo, body: Code, result: AIResult {val domain: DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
