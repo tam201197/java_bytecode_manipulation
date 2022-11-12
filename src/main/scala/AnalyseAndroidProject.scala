@@ -37,8 +37,8 @@ class AnalyseAndroidProject(projectJAR:String) {
             var obj = new ReflectionInvoke()
             makeReflectionUseObject(pc, instr, method, obj, byteCodeInfo)
             methodCallReflectionInvoke += method
-            //if (invokeObjects.length == 187)
-            //  println(invokeObjects.length)
+            if (invokeObjects.length == 60)
+              println(invokeObjects.length)
             getInfosFromInvoke(pc, body, obj, byteCodeInfo, result)
             if (obj.isValid){
               countInvoke += 1
@@ -131,11 +131,9 @@ class AnalyseAndroidProject(projectJAR:String) {
       case result.domain.DomainInitializedArrayValueTag(v) =>
         if (v.theLength > 0){
           var list_params = new ListBuffer[String]()
-          var info = new StringBuilder()
-          getValuesOfParameters(v.origin, pc, obj, list_params, info, body, result)
-          if (obj.isValid){
-            obj.valueObjects = list_params
-          }
+          var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
+          workWithInstructionANewArray(v.theLength, v.origin, obj, body, byteCodeInfoWithArray, result)
+          obj.valueInfo = byteCodeInfoWithArray.values
         }
       case result.domain.MultipleReferenceValues(v) =>
         obj.isValid = false
@@ -145,8 +143,7 @@ class AnalyseAndroidProject(projectJAR:String) {
           var info = new StringBuilder()
           getInfoParameterAsObject(org, body, obj, new_info, info, result)
           if (obj.isValid){
-            obj.valueObjects.append(info.toString())
-            obj.valueInfo.append(new_info)
+            obj.objectInfo = new_info
           }
         })
       case _ =>
@@ -258,7 +255,7 @@ class AnalyseAndroidProject(projectJAR:String) {
         if (method_name == "valueOf"){
           var new_info = new ByteCodeInfo()
           byteCodeInfo.previousByteCodeInfo = Option(new_info)
-          workWithFunctionValueOf(origin, body,new_info, result)
+          workWithFunctionValueOf(origin, obj, body,new_info, result)
         } else {
           if (class_name.equals(obj.className))
             info.append("this." + method_name)
@@ -317,7 +314,52 @@ class AnalyseAndroidProject(projectJAR:String) {
     }
   }
 
-  def workWithFunctionValueOf(origin: Int, body: Code, info: ByteCodeInfo, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+  def workWithInstructionANewArray(array_length: Int, origin: Int, obj: ReflectionUse, body:Code, info: ByteCodeInfoWithArray, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+    var pc = origin
+    var count = 0
+    while (count == array_length){
+      var new_info = new ByteCodeInfo()
+      info.values.append(new_info)
+      var instruction = body.instructions(pc)
+      pc = body.pcOfNextInstruction(pc)
+      instruction = body.instructions(pc)
+      var byteCodeInfoOfValueInArray = new ByteCodeInfoOfValueInArray()
+      while (instruction.opcode != AASTORE.opcode){
+        instruction match {
+          case DUP =>
+            count += 1
+            for (x <- 0 to 1 ){
+              pc = body.pcOfNextInstruction(pc)
+              instruction = body.instructions(pc)
+            }
+          case _ =>
+            if (instruction.isLoadLocalVariableInstruction){
+              var new_bInfo = new ByteCodeInfo()
+              val indexOfReadLocal = instruction.asLoadLocalVariableInstruction.indexOfReadLocal
+              findInstructionStoreWithIndex(pc, indexOfReadLocal, obj, body, new_bInfo, result)
+              byteCodeInfoOfValueInArray.values.append(new_bInfo)
+            } else if (instruction.isInstanceOf[ANEWARRAY]){
+              val pre_instruction = body.instructions(body.pcOfPreviousInstruction(pc))
+              val a_length = pre_instruction.mnemonic.split('_')(1).toInt
+              var byteCodeInfoWithArray = new ByteCodeInfoWithArray()
+              byteCodeInfoWithArray.setInfo(pc, instruction)
+              byteCodeInfoOfValueInArray.values.append(byteCodeInfoWithArray)
+              if (a_length > 0){
+                workWithInstructionANewArray(a_length, pc, obj, body, byteCodeInfoWithArray, result)
+              }
+            } else {
+              val n_info = new ByteCodeInfo()
+              n_info.setInfo(pc, instruction)
+              byteCodeInfoOfValueInArray.values.append(n_info)
+            }
+        }
+        byteCodeInfoOfValueInArray.setInfo(pc, instruction)
+      }
+      info.values.append(byteCodeInfoOfValueInArray)
+    }
+  }
+
+  def workWithFunctionValueOf(origin: Int, obj: ReflectionUse, body: Code, info: ByteCodeInfo, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
     val pre_pc = body.pcOfPreviousInstruction(origin)
     val instruction = body.instructions(pre_pc)
     info.setInfo(pre_pc, instruction)
@@ -325,9 +367,23 @@ class AnalyseAndroidProject(projectJAR:String) {
       println("no solution")
     } else if (instruction.isLoadLocalVariableInstruction){
       val indexOfReadLocal = instruction.asLoadLocalVariableInstruction.indexOfReadLocal
-      println(indexOfReadLocal)
+      findInstructionStoreWithIndex(pre_pc, indexOfReadLocal, obj, body, info, result)
     } else {
       println("no solution")
+    }
+  }
+
+  def findInstructionStoreWithIndex(origin: Int, index: Int, obj: ReflectionUse, body: Code, byteCodeInfo: ByteCodeInfo, result: AIResult {val domain : DefaultDomainWithCFGAndDefUse[URL]}): Unit = {
+    val pre_pc = body.pcOfPreviousInstruction(origin)
+    if (pre_pc == 0) {
+      obj.isValid = false
+      return
+    }
+    val instruction = body.instructions(pre_pc)
+    if (instruction.isStoreLocalVariableInstruction && instruction.asStoreLocalVariableInstruction.indexOfWrittenLocal == index){
+      getAnotherInfos(pre_pc, obj, byteCodeInfo, body, result)
+    } else {
+      findInstructionStoreWithIndex(pre_pc, index, obj, body, byteCodeInfo, result)
     }
   }
 
@@ -392,7 +448,12 @@ class AnalyseAndroidProject(projectJAR:String) {
           return
         }
         info.insert(0, "." + invoke.name + "()")
+      case ANEWARRAY.opcode =>
+
       case _ =>
+        if (instruction.isInstanceOf[LoadClass]){
+          info.insert(0, instruction.asInstanceOf[LoadClass].value.asObjectType.simpleName + (".class"))
+        }
         println("test")
     }
   }
@@ -689,14 +750,11 @@ class AnalyseAndroidProject(projectJAR:String) {
         result.domain.originsIterator(op).foreach(org => {
           getParameterInReflectionInvoke(org, body, obj, info, new_info, org, result)
         })
-
       case DUP =>
         if (obj.isValid && info.nonEmpty){
           info_list.insert(0, info.toString())
-
         }
       case _ =>
-
     }
     getValuesOfParameters(start, prePc, obj, info_list, info, body, result)
   }

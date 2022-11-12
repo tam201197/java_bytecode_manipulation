@@ -1,5 +1,5 @@
 import scala.collection.mutable.ListBuffer
 
-class MultiByteCodeInfo extends ByteCodeInfo {
+class ByteCodeInfoOfValueInArray extends ByteCodeInfo{
   var values: ListBuffer[ByteCodeInfo] = new ListBuffer[ByteCodeInfo]()
 }

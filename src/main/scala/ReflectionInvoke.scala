@@ -11,7 +11,6 @@ class ReflectionInvoke extends ReflectionUse {
   override var classConstructor: Option[ClassConstructor] = _
   override var isValid: Boolean = true
   var modifiedObject: String = _
-  var valueObjects: ListBuffer[String] = new ListBuffer[String]()
   var objectInfo: ByteCodeInfo = _
   var valueInfo: ListBuffer[ByteCodeInfo] = new ListBuffer[ByteCodeInfo]()
 }
